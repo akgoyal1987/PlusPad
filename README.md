@@ -113,6 +113,29 @@ and trailing space, tabs to spaces and back. Duplicate, delete, move, join.
 Case conversion including `iNVERT cASE`, camelCase and snake_case. Comment
 toggle per language. Base64, URL encoding, escaping, MD5/SHA-1/SHA-256.
 
+## Download
+
+Grab the zip from the [Releases](../../releases) page, unzip it, and drag the
+`.app` to `/Applications`. Apple silicon only.
+
+The binary is **ad-hoc signed and not notarised**, so Gatekeeper refuses the
+first launch with "cannot be opened because the developer cannot be verified".
+Either right-click the app and choose Open, or clear the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/PlusPad.app
+```
+
+Notarising needs a paid Apple Developer account, which this project does not
+have. If you would rather not take a stranger's binary on trust -- a reasonable
+position -- build from source instead. It takes about fifteen seconds.
+
+Verify a download against `SHA256SUMS.txt` on the release:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
+
 ## Build
 
 Requires the Xcode command line tools and macOS 14 or later.
@@ -191,6 +214,33 @@ indentation rather than by language.
 These are real parts of Notepad++ and their absence is a gap, not a decision
 that they do not matter.
 
+## Related
+
+Two sibling projects, same idea and same constraints -- plain Swift, no
+dependencies, one shell script to build:
+
+- [Directories](https://github.com/akgoyal1987/Directories) -- a
+  Windows-Explorer-style file navigator
+- [DockToggle](https://github.com/akgoyal1987/DockToggle) -- closing an app's
+  last window quits it, so unpinned icons leave the Dock
+
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+how the code is laid out and what to run before opening one.
+
+## About
+
+I am **Ankit Goyal**, a software engineer working on data platform and
+distributed systems.
+
+PlusPad started because I moved to a Mac and kept reaching for Notepad++, which
+has never shipped a Mac build. It turned into an exercise in seeing how far
+plain AppKit and TextKit go with no dependencies at all -- the answer was
+further than I expected.
+
+GitHub: [@akgoyal1987](https://github.com/akgoyal1987)
+
 ## Licence
 
-MIT, as with the rest of this repository.
+MIT. See [LICENSE](LICENSE).

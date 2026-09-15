@@ -24,6 +24,8 @@ struct Settings: Codable {
     var showMarkdownPreview = false
     /// How much of the editor area the document keeps when the preview is up.
     var markdownPreviewFraction = 0.5
+    /// Height of the Find result dock, remembered once it has been dragged.
+    var searchResultsHeight = 200.0
     var showTabCloseButtons = true
     var recentFiles: [String] = []
     var maxRecentFiles = 20

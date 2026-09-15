@@ -214,6 +214,9 @@ enum MenuBuilder {
             add(menu, "Markdown Preview",
                 #selector(MainWindowController.toggleMarkdownPreview(_:)), "m",
                 [.command, .shift])
+            add(menu, "Search Results",
+                #selector(MainWindowController.toggleSearchResults(_:)), "r",
+                [.command, .shift])
             menu.addItem(.separator())
             menu.addItem(container("Theme") { sub in
                 for theme in Theme.all {
@@ -399,15 +402,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     exit(0)
                 }
                 // PLUSPAD_DIAG_OPEN=<path> opens that file before capturing.
-                // PLUSPAD_DIAG_PREVIEW=1 shows the Markdown preview beside
-                // it, which is the only way to see the rendered half from a
-                // terminal.
+                // PLUSPAD_DIAG_PREVIEW=1 shows the Markdown preview beside it
+                // and PLUSPAD_DIAG_SEARCH=<term> runs Find All in it, so the
+                // two surfaces that cannot be reached headlessly -- the
+                // rendered pane and the results dock -- can still be seen.
                 let environment = ProcessInfo.processInfo.environment
                 if let path = environment["PLUSPAD_DIAG_OPEN"] {
                     _ = controller.open(url: URL(fileURLWithPath: path))
                     if environment["PLUSPAD_DIAG_PREVIEW"] == "1" {
                         controller.settings.showMarkdownPreview = true
                         controller.updateMarkdownPreview()
+                    }
+                    if let term = environment["PLUSPAD_DIAG_SEARCH"] {
+                        controller.showFind(nil)
+                        controller.findController?.show(tab: .find, seedingFromSelection: false)
+                        controller.findController?.setSearchTextForTesting(term)
+                        controller.findController?.findAll()
+                        controller.findController?.close()
                     }
                     controller.window?.layoutIfNeeded()
                     // The pane restores its scroll position one turn after the

@@ -93,9 +93,14 @@ selection. Auto-indent, auto-closing brackets, tab-indents-selection.
 **Search.** Find, Replace and Find in Files, each in Normal, Extended (`\n`,
 `\t`, `\xNN`) or Regular expression mode, with match case, whole word, wrap
 around and in-selection. Count, Find All and Mark All. Replace across every open
-tab. Find in Files skips `.git`, `node_modules` and friends, and results open in
-their own tab.
+tab. Find in Files skips `.git`, `node_modules` and friends.
 
+**Search results dock.** Find All in This File, Find All in All Files and Find
+in Files fill a panel along the bottom of the window, as Notepad++ does: a
+summary line, one collapsible group per file, and every matching line with its
+number and the match highlighted. Clicking a row goes to that hit and selects it;
+a row from a file that is not open opens it first. The panel is draggable by its
+top edge and toggled by View > Search Results (Cmd Shift R).
 
 **Markdown preview.** View > Markdown Preview (Cmd Shift M) splits the window
 and renders the document beside its source, updating as you type: headings,
@@ -164,7 +169,7 @@ Three layers, all runnable from a terminal:
 
 ```bash
 ./run-tests.sh     # 82 logic checks
-./run-selftest.sh  # 151 checks driving the real menu commands against a real window
+./run-selftest.sh  # 164 checks driving the real menu commands against a real window
 
 PLUSPAD_DIAG=1 ./build/PlusPad.app/Contents/MacOS/PlusPad   # view tree, action audit, PNG
 ```
@@ -204,7 +209,8 @@ PLUSPAD_DIAG=1 PLUSPAD_DIAG_FIND=1 ./build/PlusPad.app/Contents/MacOS/PlusPad
 
 PLUSPAD_DIAG=1 PLUSPAD_DIAG_OPEN=notes.md PLUSPAD_DIAG_PREVIEW=1 \
     ./build/PlusPad.app/Contents/MacOS/PlusPad
-# opens a file with the Markdown preview showing. Writes /tmp/pluspad-probe.png
+# opens a file with the Markdown preview showing; add PLUSPAD_DIAG_SEARCH=<term>
+# to run Find All and capture the results dock. Writes /tmp/pluspad-probe.png
 ```
 
 The log carries the whole view tree with frames. This exists because a view can
@@ -222,8 +228,9 @@ carried over and take the Mac convention instead:
 | Go to Line | Cmd L | Ctrl G | Cmd G is Find Next on macOS |
 | Toggle Comment | Cmd / | Ctrl Q | Cmd Q is Quit |
 
-Markdown Preview is Cmd Shift M. Notepad++ reaches its own preview through a
-plugin rather than a fixed key, so there was nothing to carry over.
+Markdown Preview is Cmd Shift M and the search results dock is Cmd Shift R;
+Notepad++ reaches both through its plugin and dock menus rather than a fixed
+key, so there was nothing to carry over.
 
 ## Not there yet
 

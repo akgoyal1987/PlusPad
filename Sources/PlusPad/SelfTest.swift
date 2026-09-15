@@ -494,6 +494,74 @@ enum SelfTest {
         check(withOrphan?.documents.contains { ($0.backupFile ?? "").contains(".sb-") } == false,
               "but an atomic-write temporary in the folder is not opened as a tab")
 
+        section("Search results dock")
+        // Results used to open as an untitled tab. They belong in a dock: they
+        // are a list of places to go, not a document.
+        let resultsDocument = TextDocument(untitledName: "results test")
+        resultsDocument.delegate = host
+        resultsDocument.replaceAllText("one needle here\nnothing\nanother needle line\ntail")
+        host.addDocument(resultsDocument)
+        let tabsBeforeSearch = host.documents.count
+
+        let findPanel = host.findController ?? { host.showFind(nil); return host.findController! }()
+        findPanel.show(tab: .find, seedingFromSelection: false)
+        findPanel.setSearchTextForTesting("needle")
+        findPanel.findAll()
+
+        check(host.documents.count == tabsBeforeSearch,
+              "Find All does not open a tab full of text",
+              "tabs went from \(tabsBeforeSearch) to \(host.documents.count)")
+        check(host.isSearchResultsPanelVisible, "it fills the dock along the bottom instead")
+        check(host.lastSearchResultsForTesting?.totalHits == 2, "with every hit listed",
+              "hits: \(host.lastSearchResultsForTesting?.totalHits ?? -1)")
+
+        let group = host.lastSearchResultsForTesting?.groups.first
+        check(group?.hits.count == 2, "grouped under the file they came from")
+        check(group?.hits.first?.line == 0 && group?.hits.last?.line == 2,
+              "each row knows its line number",
+              "lines: \(group?.hits.map(\.line) ?? [])")
+        check(group?.hits.first?.lineText == "one needle here",
+              "and carries the whole line for context",
+              "line text: \(group?.hits.first?.lineText ?? "-")")
+        let firstHit = group?.hits.first
+        check(firstHit.map { $0.lineText as NSString }?
+                .substring(with: firstHit!.matchInLine) == "needle",
+              "with the match located inside that line, for highlighting")
+
+        // The one thing the old tab could not do.
+        if let secondHit = group?.hits.last, let panel = host.searchResultsPanelForTesting {
+            resultsDocument.textStorage.mutableString.append("")
+            host.searchResults(panel, didChoose: secondHit)
+            let selected = host.currentPane?.textView.selectedRange() ?? NSRange(location: 0, length: 0)
+            check(selected == secondHit.range,
+                  "clicking a row selects that match in the editor",
+                  "selected \(selected), expected \(secondHit.range)")
+            check(host.currentDocument === resultsDocument,
+                  "and switches to the file it came from")
+        }
+
+        // Every open file, grouped per file.
+        let secondDocument = TextDocument(untitledName: "results test 2")
+        secondDocument.delegate = host
+        secondDocument.replaceAllText("needle in another buffer")
+        host.addDocument(secondDocument)
+        findPanel.setSearchTextForTesting("needle")
+        findPanel.findAllInAllDocuments()
+        let allGroups = host.lastSearchResultsForTesting?.groups ?? []
+        check(allGroups.count == 2, "searching all open files groups the hits per file",
+              "groups: \(allGroups.map(\.title))")
+        check(allGroups.allSatisfy { $0.documentID != nil },
+              "each group points back at its document")
+        check(host.lastSearchResultsForTesting?.summary.contains("3 hits") == true,
+              "and the summary counts them all",
+              "summary: \(host.lastSearchResultsForTesting?.summary ?? "-")")
+
+        if let panel = host.searchResultsPanelForTesting {
+            host.searchResultsDidRequestClose(panel)
+            check(!host.isSearchResultsPanelVisible, "Close puts the dock away")
+        }
+        findPanel.close()
+
         section("Markdown preview")
         let markdownSource = """
         # Title

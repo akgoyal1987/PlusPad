@@ -5,6 +5,10 @@ final class MainContentView: NSView {
     var toolbar: ToolbarView?
     var tabBar: TabBarView?
     var editorContainer: NSView?
+    /// The Find result dock. Sits between the editor and the status bar, and
+    /// takes its height out of the editor rather than out of the window.
+    var resultsPanel: NSView?
+    var resultsHeight: CGFloat = 200
     var statusBar: StatusBarView?
 
     override var isFlipped: Bool { true }
@@ -25,6 +29,16 @@ final class MainContentView: NSView {
             bottom = StatusBarView.height
             statusBar.frame = NSRect(x: 0, y: bounds.height - bottom,
                                      width: bounds.width, height: bottom)
+        }
+        if let resultsPanel, !resultsPanel.isHidden {
+            // Never more than two thirds of what is left, so the results cannot
+            // squeeze the document it is meant to lead you back to.
+            let available = max(0, bounds.height - y - bottom)
+            let height = min(max(SearchResultsPanel.minimumHeight, resultsHeight),
+                             available * 0.66)
+            resultsPanel.frame = NSRect(x: 0, y: bounds.height - bottom - height,
+                                        width: bounds.width, height: height)
+            bottom += height
         }
         editorContainer?.frame = NSRect(x: 0, y: y, width: bounds.width,
                                         height: max(0, bounds.height - y - bottom))
@@ -147,6 +161,8 @@ final class MainWindowController: NSWindowController {
     private let toolbar = ToolbarView()
     private let tabBar = TabBarView()
     private let editorContainer = EditorSplitView()
+    private var resultsPanel: SearchResultsPanel?
+    private var lastSearchResults: SearchResults?
     private var previewPane: MarkdownPreviewPane?
     private let statusBar = StatusBarView()
 
@@ -221,6 +237,7 @@ final class MainWindowController: NSWindowController {
         for pane in panes.values { pane.apply(settings: settings, theme: current) }
         editorContainer.dividerColor = current.chromeBorder
         previewPane?.applySettings(settings)
+        resultsPanel?.applyTheme(current, font: settings.editorFont)
         toolbar.syncToggles(with: settings)
         contentView.needsLayout = true
         window?.appearance = NSAppearance(named: current.isDark ? .darkAqua : .aqua)
@@ -954,5 +971,78 @@ extension MainWindowController: MarkdownPreviewDelegate {
             }
         }
         NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Search results
+
+extension MainWindowController: SearchResultsPanelDelegate {
+
+    /// Whether a search has produced anything to show yet.
+    var hasSearchResults: Bool { resultsPanel != nil }
+
+    var searchResultsPanelForTesting: SearchResultsPanel? { resultsPanel }
+    var lastSearchResultsForTesting: SearchResults? { lastSearchResults }
+
+    var isSearchResultsPanelVisible: Bool {
+        guard let panel = resultsPanel else { return false }
+        return !panel.isHidden
+    }
+
+    /// Show a set of results in the dock along the bottom.
+    ///
+    /// Results used to be dumped into an untitled tab. That made them look like
+    /// a document: it sat in the tab bar, it could be edited, closing it asked
+    /// nothing but it still counted as work, and the one thing every line in it
+    /// is for -- going to that line -- was not possible at all.
+    func presentSearchResults(_ results: SearchResults) {
+        let panel = resultsPanel ?? {
+            let created = SearchResultsPanel(theme: theme, font: settings.editorFont)
+            created.delegate = self
+            resultsPanel = created
+            contentView.resultsPanel = created
+            contentView.addSubview(created)
+            return created
+        }()
+        panel.isHidden = false
+        lastSearchResults = results
+        contentView.resultsHeight = CGFloat(settings.searchResultsHeight)
+        panel.show(results)
+        contentView.needsLayout = true
+        window?.invalidateCursorRects(for: panel)
+    }
+
+    @objc func toggleSearchResults(_ sender: Any?) {
+        guard let panel = resultsPanel else { return }
+        panel.isHidden.toggle()
+        contentView.needsLayout = true
+    }
+
+    func searchResultsDidRequestClose(_ panel: SearchResultsPanel) {
+        panel.isHidden = true
+        contentView.needsLayout = true
+        if let textView = currentPane?.textView { window?.makeFirstResponder(textView) }
+    }
+
+    func searchResults(_ panel: SearchResultsPanel, didResizeTo height: CGFloat) {
+        settings.searchResultsHeight = Double(height)
+        contentView.resultsHeight = height
+        contentView.needsLayout = true
+        SessionStore.shared.saveSettings()
+    }
+
+    func searchResults(_ panel: SearchResultsPanel, didChoose hit: SearchResultHit) {
+        // A hit in a file that is not open -- every Find in Files result --
+        // opens it first. Without that the row would be a dead end, which is
+        // the whole reason the results are a list of places rather than text.
+        var index: Int? = documents.firstIndex { $0.id == hit.documentID }
+        if index == nil, let url = hit.fileURL {
+            guard open(url: url) else { return }
+            index = documents.firstIndex { $0.fileURL?.standardizedFileURL == url.standardizedFileURL }
+        }
+        guard let index else { return }
+        selectTab(index)
+        currentPane?.reveal(hit.range)
+        if let textView = currentPane?.textView { window?.makeFirstResponder(textView) }
     }
 }

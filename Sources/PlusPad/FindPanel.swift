@@ -472,17 +472,12 @@ final class FindPanelController: NSWindowController, NSWindowDelegate {
         }
         pane.textView.setFindHighlights(hits.map(\.range), current: nil)
 
-        let name = host.currentDocument?.displayName ?? "document"
-        var report = "Search \"\(findField.stringValue)\" (\(hits.count) hits in \(name))\n\n"
-        for hit in hits {
-            let line = pane.document.lineIndex.lineIndex(containing: hit.range.location)
-            let lineRange = pane.document.lineIndex.range(ofLine: line)
-            let safe = NSRange(location: lineRange.location,
-                               length: min(lineRange.length, text.length - lineRange.location))
-            let content = text.substring(with: safe).trimmingCharacters(in: .newlines)
-            report += "\tLine \(line + 1): \(content)\n"
-        }
-        host.presentSearchResults(title: "Search results", text: report)
+        let document = pane.document
+        let group = SearchResultGroup.make(title: document.fileURL?.path ?? document.displayName,
+                                           documentID: document.id,
+                                           fileURL: document.fileURL,
+                                           matches: hits, text: text, index: document.lineIndex)
+        host.presentSearchResults(SearchResults.build(term: findField.stringValue, groups: [group]))
         statusLabel.stringValue = "\(hits.count) match\(hits.count == 1 ? "" : "es")."
     }
 
@@ -491,40 +486,27 @@ final class FindPanelController: NSWindowController, NSWindowDelegate {
     /// the user has not visited is searched like any other.
     @objc func findAllInAllDocuments() {
         guard let query = currentQuery(), let host else { return }
-        var report = "Search \"\(findField.stringValue)\" in \(host.documents.count) open file"
-        report += host.documents.count == 1 ? "\n\n" : "s\n\n"
-        var totalHits = 0
-        var matchedFiles = 0
+        var groups: [SearchResultGroup] = []
 
         for document in host.documents {
             let text = document.textStorage.string as NSString
             let hits = FindEngine.matches(of: query, in: text,
                                           range: NSRange(location: 0, length: text.length))
             guard !hits.isEmpty else { continue }
-            matchedFiles += 1
-            totalHits += hits.count
-
-            let where_ = document.fileURL?.path ?? document.displayName
-            report += "\(where_)  (\(hits.count) hit\(hits.count == 1 ? "" : "s"))\n"
-            for hit in hits.prefix(500) {
-                let line = document.lineIndex.lineIndex(containing: hit.range.location)
-                let lineRange = document.lineIndex.range(ofLine: line)
-                let safe = NSRange(location: lineRange.location,
-                                   length: min(lineRange.length, text.length - lineRange.location))
-                report += "\tLine \(line + 1): "
-                report += text.substring(with: safe).trimmingCharacters(in: .newlines) + "\n"
-            }
-            if hits.count > 500 { report += "\t... \(hits.count - 500) more\n" }
-            report += "\n"
+            groups.append(SearchResultGroup.make(
+                title: document.fileURL?.path ?? document.displayName,
+                documentID: document.id, fileURL: document.fileURL,
+                matches: hits, text: text, index: document.lineIndex))
         }
 
-        guard totalHits > 0 else {
+        guard !groups.isEmpty else {
             statusLabel.stringValue = "No matches in any open file."
             return
         }
-        host.presentSearchResults(title: "Search results", text: report)
-        statusLabel.stringValue = "\(totalHits) hit\(totalHits == 1 ? "" : "s") in \(matchedFiles) "
-            + "file\(matchedFiles == 1 ? "" : "s")."
+        let results = SearchResults.build(term: findField.stringValue, groups: groups)
+        host.presentSearchResults(results)
+        statusLabel.stringValue = "\(results.totalHits) hit\(results.totalHits == 1 ? "" : "s") "
+            + "in \(groups.count) file\(groups.count == 1 ? "" : "s")."
     }
 
     private func lineNumber(of location: Int, in pane: EditorPane) -> Int {
@@ -658,7 +640,11 @@ final class FindPanelController: NSWindowController, NSWindowDelegate {
                                              filters: filters, recursive: recursive)
             DispatchQueue.main.async {
                 guard let self else { return }
-                host.presentSearchResults(title: "Search results", text: report.text)
+                guard !report.groups.isEmpty else {
+                    self.statusLabel.stringValue = "No matches (searched \(report.scanned))."
+                    return
+                }
+                host.presentSearchResults(SearchResults.build(term: needle, groups: report.groups))
                 self.statusLabel.stringValue =
                     "\(report.hits) hit\(report.hits == 1 ? "" : "s") in \(report.files) file\(report.files == 1 ? "" : "s") "
                     + "(searched \(report.scanned))."
@@ -671,7 +657,7 @@ final class FindPanelController: NSWindowController, NSWindowDelegate {
 enum FileSearcher {
 
     struct Report {
-        var text: String
+        var groups: [SearchResultGroup]
         var hits: Int
         var files: Int
         var scanned: Int
@@ -690,7 +676,7 @@ enum FileSearcher {
     static func search(query: SearchQuery, needle: String, in root: URL,
                        filters: [String], recursive: Bool) -> Report {
         let fm = FileManager.default
-        var output = "Search \"\(needle)\" in \(root.path)\n\n"
+        var groups: [SearchResultGroup] = []
         var totalHits = 0
         var matchedFiles = 0
         var scanned = 0
@@ -725,26 +711,19 @@ enum FileSearcher {
 
                 matchedFiles += 1
                 totalHits += hits.count
-                output += "\(entry.path)  (\(hits.count) hit\(hits.count == 1 ? "" : "s"))\n"
 
                 let index = LineIndex()
                 index.rebuild(text)
-                for hit in hits.prefix(500) {
-                    let line = index.lineIndex(containing: hit.range.location)
-                    let lineRange = index.range(ofLine: line)
-                    let safe = NSRange(location: lineRange.location,
-                                       length: min(lineRange.length, text.length - lineRange.location))
-                    let content = text.substring(with: safe).trimmingCharacters(in: .newlines)
-                    output += "\tLine \(line + 1): \(content)\n"
-                }
-                if hits.count > 500 { output += "\t... \(hits.count - 500) more\n" }
-                output += "\n"
+                // No document id: the file is not open. The URL is what makes
+                // the row clickable, by opening it first.
+                groups.append(SearchResultGroup.make(title: entry.path, documentID: nil,
+                                                     fileURL: entry, matches: hits,
+                                                     text: text, index: index))
             }
             if !recursive && directory == root { break }
         }
 
-        if totalHits == 0 { output += "No matches.\n" }
-        return Report(text: output, hits: totalHits, files: matchedFiles, scanned: scanned)
+        return Report(groups: groups, hits: totalHits, files: matchedFiles, scanned: scanned)
     }
 
     /// Glob match against the `*.ext` style filters Notepad++ accepts. An empty

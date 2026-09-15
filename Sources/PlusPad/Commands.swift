@@ -70,16 +70,6 @@ extension MainWindowController: PlusPadCommands, StatusBarViewDelegate, NSMenuIt
     /// they are text, the editor already knows how to show text, and putting
     /// them in a tab means they are searchable, savable and survive a relaunch
     /// like anything else.
-    func presentSearchResults(title: String, text: String) {
-        let document = TextDocument(untitledName: title)
-        document.delegate = self
-        document.setLanguage(LanguageRegistry.plainText, explicit: true)
-        document.replaceAllText(text)
-        document.acceptCurrentTextAsSaved()
-        addDocument(document)
-        currentPane?.textView.rebuildBaseAttributes()
-    }
-
     // MARK: - File
 
     func newDocument(_ sender: Any?) {
@@ -750,6 +740,10 @@ extension MainWindowController: PlusPadCommands, StatusBarViewDelegate, NSMenuIt
             item.state = settings.showStatusBar ? .on : .off
         case #selector(MainWindowController.toggleMarkdownPreview(_:)):
             item.state = settings.showMarkdownPreview ? .on : .off
+        case #selector(MainWindowController.toggleSearchResults(_:)):
+            item.state = isSearchResultsPanelVisible ? .on : .off
+            // Nothing to show until a search has produced something.
+            return hasSearchResults
         case #selector(MainWindowController.toggleOverwrite(_:)):
             item.state = isOverwriteMode ? .on : .off
 

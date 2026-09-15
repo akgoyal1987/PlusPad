@@ -96,6 +96,18 @@ around and in-selection. Count, Find All and Mark All. Replace across every open
 tab. Find in Files skips `.git`, `node_modules` and friends, and results open in
 their own tab.
 
+
+**Markdown preview.** View > Markdown Preview (Cmd Shift M) splits the window
+and renders the document beside its source, updating as you type: headings,
+emphasis, lists and task items, tables, blockquotes, links, local images, and
+fenced code coloured by the same scanners the editor uses. The divider drags and
+its position is remembered. Two things it deliberately will not do: it fetches
+nothing over the network, so a remote image is shown as its alt text rather than
+telling its host you opened the file, and it renders no HTML, so embedded tags
+appear as the text they are. Neither is a limitation of the renderer -- the app
+contains no networking code and no web view, and the preview was not going to be
+the thing that introduced either.
+
 **Encoding and line endings.** Detected on open, shown in the status bar,
 changeable from a click. Convert the text, or reopen the bytes under a different
 encoding -- two different things, kept apart.
@@ -152,7 +164,7 @@ Three layers, all runnable from a terminal:
 
 ```bash
 ./run-tests.sh     # 82 logic checks
-./run-selftest.sh  # 127 checks driving the real menu commands against a real window
+./run-selftest.sh  # 151 checks driving the real menu commands against a real window
 
 PLUSPAD_DIAG=1 ./build/PlusPad.app/Contents/MacOS/PlusPad   # view tree, action audit, PNG
 ```
@@ -189,6 +201,10 @@ PLUSPAD_DIAG=1 ./build/PlusPad.app/Contents/MacOS/PlusPad
 
 PLUSPAD_DIAG=1 PLUSPAD_DIAG_FIND=1 ./build/PlusPad.app/Contents/MacOS/PlusPad
 # captures the Find panel instead
+
+PLUSPAD_DIAG=1 PLUSPAD_DIAG_OPEN=notes.md PLUSPAD_DIAG_PREVIEW=1 \
+    ./build/PlusPad.app/Contents/MacOS/PlusPad
+# opens a file with the Markdown preview showing. Writes /tmp/pluspad-probe.png
 ```
 
 The log carries the whole view tree with frames. This exists because a view can
@@ -205,6 +221,9 @@ carried over and take the Mac convention instead:
 | Replace | Cmd Opt F | Ctrl H | Cmd H is Hide, reserved by macOS |
 | Go to Line | Cmd L | Ctrl G | Cmd G is Find Next on macOS |
 | Toggle Comment | Cmd / | Ctrl Q | Cmd Q is Quit |
+
+Markdown Preview is Cmd Shift M. Notepad++ reaches its own preview through a
+plugin rather than a fixed key, so there was nothing to carry over.
 
 ## Not there yet
 

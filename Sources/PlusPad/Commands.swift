@@ -748,6 +748,8 @@ extension MainWindowController: PlusPadCommands, StatusBarViewDelegate, NSMenuIt
             item.state = settings.showToolbar ? .on : .off
         case #selector(MainWindowController.toggleStatusBar(_:)):
             item.state = settings.showStatusBar ? .on : .off
+        case #selector(MainWindowController.toggleMarkdownPreview(_:)):
+            item.state = settings.showMarkdownPreview ? .on : .off
         case #selector(MainWindowController.toggleOverwrite(_:)):
             item.state = isOverwriteMode ? .on : .off
 

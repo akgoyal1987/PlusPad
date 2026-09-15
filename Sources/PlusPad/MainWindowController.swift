@@ -31,6 +31,111 @@ final class MainContentView: NSView {
     }
 }
 
+/// Splits the editor area between the document and its rendered preview.
+///
+/// A custom container rather than an `NSSplitView`: the divider has to match
+/// the window's other chrome, which is themed and hand-drawn, and the behaviour
+/// wanted here is one fixed divider with a remembered position rather than
+/// anything `NSSplitView` adds on top of that.
+final class EditorSplitView: NSView {
+    /// The editor pane for the current tab. Swapped as tabs change.
+    var content: NSView? {
+        didSet {
+            guard content !== oldValue else { return }
+            oldValue?.removeFromSuperview()
+            if let content {
+                addSubview(content, positioned: .below, relativeTo: preview)
+            }
+            needsLayout = true
+        }
+    }
+
+    var preview: NSView? {
+        didSet {
+            guard preview !== oldValue else { return }
+            oldValue?.removeFromSuperview()
+            if let preview { addSubview(preview) }
+            needsLayout = true
+        }
+    }
+
+    /// Fraction of the usable width kept by the editor.
+    var fraction: CGFloat = 0.5
+    var onFractionChanged: ((CGFloat) -> Void)?
+    var dividerColor: NSColor = .gridColor
+
+    static let dividerWidth: CGFloat = 6
+    private var dragging = false
+
+    override var isFlipped: Bool { true }
+
+    private var previewIsVisible: Bool {
+        guard let preview else { return false }
+        return !preview.isHidden
+    }
+
+    override func layout() {
+        super.layout()
+        guard let content else { return }
+        guard previewIsVisible, let preview else {
+            content.frame = bounds
+            return
+        }
+        let usable = max(0, bounds.width - Self.dividerWidth)
+        // Both halves stay usable however far the divider is dragged, so a
+        // mis-drag cannot leave the editor a sliver wide with no way back.
+        let left = (usable * min(max(fraction, 0.15), 0.85)).rounded()
+        content.frame = NSRect(x: 0, y: 0, width: left, height: bounds.height)
+        preview.frame = NSRect(x: left + Self.dividerWidth, y: 0,
+                               width: usable - left, height: bounds.height)
+    }
+
+    private var dividerRect: NSRect {
+        guard previewIsVisible, let content else { return .zero }
+        return NSRect(x: content.frame.maxX, y: 0, width: Self.dividerWidth, height: bounds.height)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard previewIsVisible else { return }
+        dividerColor.setFill()
+        // Geometry from `bounds`, never from `dirtyRect`, which is the window's
+        // dirty region expressed in this view's coordinates.
+        let line = NSRect(x: dividerRect.midX - 0.5, y: 0, width: 1, height: bounds.height)
+        line.intersection(dirtyRect).fill()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard previewIsVisible else { return }
+        addCursorRect(dividerRect, cursor: .resizeLeftRight)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard previewIsVisible, dividerRect.insetBy(dx: -2, dy: 0).contains(point) else {
+            super.mouseDown(with: event)
+            return
+        }
+        dragging = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard dragging else { return super.mouseDragged(with: event) }
+        let point = convert(event.locationInWindow, from: nil)
+        let usable = max(1, bounds.width - Self.dividerWidth)
+        fraction = min(max(point.x / usable, 0.15), 0.85)
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard dragging else { return super.mouseUp(with: event) }
+        dragging = false
+        onFractionChanged?(fraction)
+        window?.invalidateCursorRects(for: self)
+    }
+}
+
 /// The window: tabs, documents, and everything the menus act on.
 final class MainWindowController: NSWindowController {
 
@@ -41,7 +146,8 @@ final class MainWindowController: NSWindowController {
     private let contentView = MainContentView()
     private let toolbar = ToolbarView()
     private let tabBar = TabBarView()
-    private let editorContainer = NSView()
+    private let editorContainer = EditorSplitView()
+    private var previewPane: MarkdownPreviewPane?
     private let statusBar = StatusBarView()
 
     private var store: SessionStore { SessionStore.shared }
@@ -113,6 +219,8 @@ final class MainWindowController: NSWindowController {
         toolbar.isHidden = !settings.showToolbar
         statusBar.isHidden = !settings.showStatusBar
         for pane in panes.values { pane.apply(settings: settings, theme: current) }
+        editorContainer.dividerColor = current.chromeBorder
+        previewPane?.applySettings(settings)
         toolbar.syncToggles(with: settings)
         contentView.needsLayout = true
         window?.appearance = NSAppearance(named: current.isDark ? .darkAqua : .aqua)
@@ -206,18 +314,15 @@ final class MainWindowController: NSWindowController {
         let document = documents[index]
 
         let pane = paneForDocument(document)
-        for view in editorContainer.subviews where view !== pane { view.removeFromSuperview() }
-        if pane.superview !== editorContainer {
-            pane.frame = editorContainer.bounds
-            pane.autoresizingMask = [.width, .height]
-            editorContainer.addSubview(pane)
-            pane.restoreViewState()
-        }
+        let isNewlyShown = pane.superview !== editorContainer
+        editorContainer.content = pane
+        if isNewlyShown { pane.restoreViewState() }
         pane.textView.recomputeFolds()
         window?.makeFirstResponder(pane.textView)
         refreshTabs()
         updateStatusBar()
         updateWindowTitle()
+        updateMarkdownPreview()
         findController?.editorChanged()
     }
 
@@ -759,10 +864,95 @@ extension MainWindowController: TextDocumentDelegate {
         refreshTabs()
         updateStatusBar()
         updateWindowTitle()
+        if document === currentDocument { previewPane?.scheduleRefresh() }
     }
 
     func documentLanguageChanged(_ document: TextDocument) {
         panes[document.id]?.textView.refreshHighlighting()
         updateStatusBar()
+        // Setting the language by hand is how a file that is Markdown without
+        // saying so in its name gets a preview.
+        if document === currentDocument { updateMarkdownPreview() }
+    }
+}
+
+// MARK: - Markdown preview
+
+extension MainWindowController: MarkdownPreviewDelegate {
+
+    /// The preview is only ever shown for Markdown. The setting is remembered
+    /// across launches and across tabs, so switching to a .md file brings it
+    /// back rather than making you ask for it again, and switching away hides
+    /// it rather than showing a rendered view of source code.
+    var currentDocumentIsMarkdown: Bool {
+        guard let language = currentDocument?.language else { return false }
+        if case .markdown = language.flavor { return true }
+        return false
+    }
+
+    /// Whether the rendered pane is on screen right now, which is not the same
+    /// as the setting: the setting is a standing preference, this is what the
+    /// current document actually gets.
+    var isMarkdownPreviewVisible: Bool {
+        guard let preview = editorContainer.preview else { return false }
+        return !preview.isHidden
+    }
+
+    func updateMarkdownPreview() {
+        let wanted = settings.showMarkdownPreview && currentDocumentIsMarkdown
+        guard wanted else {
+            editorContainer.preview?.isHidden = true
+            editorContainer.needsLayout = true
+            editorContainer.needsDisplay = true
+            return
+        }
+
+        let pane = previewPane ?? {
+            let created = MarkdownPreviewPane(settings: settings, theme: theme)
+            created.delegate = self
+            previewPane = created
+            editorContainer.preview = created
+            editorContainer.fraction = CGFloat(settings.markdownPreviewFraction)
+            editorContainer.onFractionChanged = { [weak self] fraction in
+                guard let self else { return }
+                self.settings.markdownPreviewFraction = Double(fraction)
+                SessionStore.shared.saveSettings()
+            }
+            return created
+        }()
+
+        pane.isHidden = false
+        pane.show(currentDocument)
+        editorContainer.needsLayout = true
+        editorContainer.needsDisplay = true
+        window?.invalidateCursorRects(for: editorContainer)
+    }
+
+    @objc func toggleMarkdownPreview(_ sender: Any?) {
+        settings.showMarkdownPreview.toggle()
+        SessionStore.shared.saveSettings()
+        // Asking for a preview on a document that is not Markdown is a clear
+        // enough statement of intent to treat as one: mark the language rather
+        // than silently doing nothing.
+        if settings.showMarkdownPreview, !currentDocumentIsMarkdown,
+           let document = currentDocument, let markdown = LanguageRegistry.named("Markdown") {
+            document.setLanguage(markdown, explicit: true)
+            currentPane?.textView.refreshHighlighting()
+        }
+        updateMarkdownPreview()
+    }
+
+    func preview(_ preview: MarkdownPreviewPane, didActivate url: URL) {
+        // A link to a local file opens as a tab, which is what makes a folder of
+        // cross-linked notes navigable. Anything else is the system's business.
+        if url.isFileURL {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+               !isDirectory.boolValue {
+                open(url: url)
+                return
+            }
+        }
+        NSWorkspace.shared.open(url)
     }
 }

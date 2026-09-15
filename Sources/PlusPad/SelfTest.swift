@@ -494,6 +494,150 @@ enum SelfTest {
         check(withOrphan?.documents.contains { ($0.backupFile ?? "").contains(".sb-") } == false,
               "but an atomic-write temporary in the folder is not opened as a tab")
 
+        section("Markdown preview")
+        let markdownSource = """
+        # Title
+
+        Body with **bold**, *italic*, `code` and a [link](https://example.com).
+
+        - bullet
+        - [x] done
+
+        > quoted
+
+        ---
+
+        | A | B |
+        | - | - |
+        | 1 | 2 |
+
+        ```swift
+        let x = 1
+        ```
+
+        [ref]: https://example.org
+        See the [reference][ref] and ![remote](https://example.com/a.png).
+        """
+        let options = MarkdownRenderer.Options(theme: host.theme,
+                                               editorFont: host.settings.editorFont,
+                                               baseURL: nil)
+        let rendered = MarkdownRenderer.render(markdownSource, options: options)
+        let renderedText = rendered.string
+        let wholeRender = NSRange(location: 0, length: rendered.length)
+
+        check(rendered.length > 0, "a document renders to something")
+        check(!renderedText.contains("**") && !renderedText.contains("`"),
+              "the markers themselves are gone from the rendered text",
+              "rendered: \(renderedText.prefix(120))")
+        check(renderedText.contains("Title"), "the heading text survives")
+
+        var sawHeadingFont = false
+        var sawBold = false
+        var sawItalic = false
+        var sawMonospace = false
+        rendered.enumerateAttribute(.font, in: wholeRender) { value, range, _ in
+            guard let font = value as? NSFont else { return }
+            let traits = NSFontManager.shared.traits(of: font)
+            let text = (renderedText as NSString).substring(with: range)
+            if text.contains("Title"), font.pointSize > host.settings.editorFont.pointSize + 2 {
+                sawHeadingFont = true
+            }
+            if text.contains("bold"), traits.contains(.boldFontMask) { sawBold = true }
+            if text.contains("italic"), traits.contains(.italicFontMask) { sawItalic = true }
+            if text.contains("code"), font.fontName == host.settings.editorFont.fontName {
+                sawMonospace = true
+            }
+        }
+        check(sawHeadingFont, "a heading is set larger than body text")
+        check(sawBold, "bold renders bold rather than as asterisks")
+        check(sawItalic, "italic renders italic")
+        check(sawMonospace, "a code span keeps the editor's own face")
+
+        var linkedURLs: [String] = []
+        rendered.enumerateAttribute(.link, in: wholeRender) { value, _, _ in
+            if let url = value as? URL { linkedURLs.append(url.absoluteString) }
+        }
+        check(linkedURLs.contains("https://example.com"), "a link carries a real URL",
+              "found \(linkedURLs)")
+        check(linkedURLs.contains("https://example.org"),
+              "a reference-style link resolves against its definition further down")
+        check(!renderedText.contains("[ref]: https://example.org"),
+              "and the definition itself is not printed as body text")
+
+        // The preview must never reach the network. A remote image is shown as
+        // its alt text, so nothing about opening a file tells its author that
+        // you did.
+        var attachments = 0
+        rendered.enumerateAttribute(.attachment, in: wholeRender) { value, _, _ in
+            if value != nil { attachments += 1 }
+        }
+        check(renderedText.contains("remote"), "a remote image is shown as its alt text, not fetched")
+        check(attachments == 1, "the only attachment is the horizontal rule",
+              "attachments: \(attachments)")
+
+        let dangerous = MarkdownRenderer.render("[x](javascript:alert(1))", options: options)
+        var dangerousLinks = 0
+        dangerous.enumerateAttribute(.link, in: NSRange(location: 0, length: dangerous.length)) { value, _, _ in
+            if value != nil { dangerousLinks += 1 }
+        }
+        check(dangerousLinks == 0, "a javascript: URL is rendered as text and never linked")
+
+        let htmlRender = MarkdownRenderer.render("<b>not bold</b>", options: options)
+        check(htmlRender.string.contains("<b>"), "embedded HTML is shown literally, never executed")
+
+        var sawTableBlock = false
+        rendered.enumerateAttribute(.paragraphStyle, in: wholeRender) { value, _, _ in
+            if let style = value as? NSParagraphStyle, !style.textBlocks.isEmpty { sawTableBlock = true }
+        }
+        check(sawTableBlock, "a table becomes real cells rather than a row of pipes")
+
+        var codeIsColoured = false
+        rendered.enumerateAttribute(.foregroundColor, in: wholeRender) { value, range, _ in
+            let text = (renderedText as NSString).substring(with: range)
+            guard text.contains("let"), let colour = value as? NSColor else { return }
+            if colour != host.theme.foreground { codeIsColoured = true }
+        }
+        check(codeIsColoured, "a fenced block is coloured by the editor's own scanner")
+        check(renderedText.contains("[x]"), "a task item keeps its checkbox")
+
+        // The pane itself, and the rule that it only appears for Markdown.
+        let markdownDocument = TextDocument(untitledName: "preview test")
+        markdownDocument.delegate = host
+        markdownDocument.replaceAllText("# Hello")
+        markdownDocument.setLanguage(LanguageRegistry.named("Markdown") ?? LanguageRegistry.plainText,
+                                     explicit: true)
+        host.addDocument(markdownDocument)
+        host.settings.showMarkdownPreview = false
+        host.updateMarkdownPreview()
+        check(host.currentDocumentIsMarkdown, "a Markdown document is recognised as one")
+        host.toggleMarkdownPreview(nil)
+        check(host.settings.showMarkdownPreview, "the View menu toggle turns the preview on")
+        check(host.isMarkdownPreviewVisible, "and the pane appears beside the editor")
+
+        let plainDocument = TextDocument(untitledName: "not markdown")
+        plainDocument.delegate = host
+        plainDocument.setLanguage(LanguageRegistry.plainText, explicit: true)
+        host.addDocument(plainDocument)
+        check(!host.isMarkdownPreviewVisible,
+              "switching to a document that is not Markdown hides it again")
+        host.selectTab(host.documents.count - 2)
+        check(host.isMarkdownPreviewVisible, "switching back brings it straight back")
+        host.toggleMarkdownPreview(nil)
+        check(!host.isMarkdownPreviewVisible, "and the toggle puts it away")
+
+        // A pane built while the window is already on screen -- every File >
+        // Open -- used to sit 65pt right of its resting position, hiding the
+        // first characters of every line behind the gutter.
+        if let pane = host.currentPane {
+            pane.layoutSubtreeIfNeeded()
+            let clip = pane.scrollView.contentView
+            let far = NSRect(origin: NSPoint(x: -1_000_000, y: -1_000_000), size: clip.bounds.size)
+            let resting = clip.constrainBoundsRect(far).origin.x
+            check(abs(clip.bounds.origin.x - resting) < 1,
+                  "a pane opened into a live window is not scrolled sideways",
+                  "clip x \(clip.bounds.origin.x), resting \(resting)")
+        }
+
         section("Workspace")
         let live = Set(host.documents.map { Workspace.backupFilename(for: $0) })
         _ = SessionStore.shared.inspectForCleanup(liveBackups: live)

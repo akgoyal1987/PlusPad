@@ -19,6 +19,11 @@ struct Settings: Codable {
     var smartHighlight = true
     var showToolbar = true
     var showStatusBar = true
+    /// The rendered Markdown pane. Remembered across launches, but only ever
+    /// shown for a Markdown document -- see MainWindowController.
+    var showMarkdownPreview = false
+    /// How much of the editor area the document keeps when the preview is up.
+    var markdownPreviewFraction = 0.5
     var showTabCloseButtons = true
     var recentFiles: [String] = []
     var maxRecentFiles = 20

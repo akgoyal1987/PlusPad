@@ -211,6 +211,9 @@ enum MenuBuilder {
             menu.addItem(.separator())
             add(menu, "Show Toolbar", #selector(MainWindowController.toggleToolbar(_:)))
             add(menu, "Show Status Bar", #selector(MainWindowController.toggleStatusBar(_:)))
+            add(menu, "Markdown Preview",
+                #selector(MainWindowController.toggleMarkdownPreview(_:)), "m",
+                [.command, .shift])
             menu.addItem(.separator())
             menu.addItem(container("Theme") { sub in
                 for theme in Theme.all {
@@ -393,6 +396,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     controller.showFind(nil)
                     Diagnostics.capture(controller.findController?.window,
                                         to: "/tmp/pluspad-find.png")
+                    exit(0)
+                }
+                // PLUSPAD_DIAG_OPEN=<path> opens that file before capturing.
+                // PLUSPAD_DIAG_PREVIEW=1 shows the Markdown preview beside
+                // it, which is the only way to see the rendered half from a
+                // terminal.
+                let environment = ProcessInfo.processInfo.environment
+                if let path = environment["PLUSPAD_DIAG_OPEN"] {
+                    _ = controller.open(url: URL(fileURLWithPath: path))
+                    if environment["PLUSPAD_DIAG_PREVIEW"] == "1" {
+                        controller.settings.showMarkdownPreview = true
+                        controller.updateMarkdownPreview()
+                    }
+                    controller.window?.layoutIfNeeded()
+                    // The pane restores its scroll position one turn after the
+                    // document is installed, so a capture in this same turn
+                    // photographs the state before that has happened.
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                    controller.window?.layoutIfNeeded()
+                    Diagnostics.capture(controller.window, to: "/tmp/pluspad-probe.png")
                     exit(0)
                 }
                 Diagnostics.dump(controller.window, label: "render probe")

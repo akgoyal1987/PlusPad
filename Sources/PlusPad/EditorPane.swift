@@ -62,12 +62,45 @@ final class EditorPane: NSView {
         NotificationCenter.default.removeObserver(self)
     }
 
+    private var hasSettledHorizontalOrigin = false
+
     override func layout() {
         super.layout()
         scrollView.frame = bounds
         // Nothing to do for wrapping: `widthTracksTextView` keeps the container
         // matched to the text view, which AppKit has already sized to the clip
         // view minus the ruler.
+        settleHorizontalOriginIfNeeded()
+    }
+
+    /// Put a newly built pane at its real unscrolled position.
+    ///
+    /// AppKit constrains the clip view when it is scrolled, not when a ruler
+    /// appears beside it. A pane built while the window is already on screen --
+    /// which is every File > Open -- therefore starts at `x = 0` while
+    /// unscrolled is really `x = -65.5`, and nothing corrects it: the first
+    /// horizontal scroll would, but a document that fits the width never gets
+    /// one. So the first characters of every line stay hidden behind the gutter
+    /// for the life of that tab, and the file opens showing "ding one" where
+    /// "# Heading one" was written.
+    ///
+    /// Restoring a session does not hit this, because those panes are built
+    /// before the window is laid out and AppKit constrains them on the way up.
+    /// That is why it survived: the common path at launch looks right.
+    ///
+    /// Once per pane, and only while it still sits where it was born, so a
+    /// reader who has deliberately scrolled right is never yanked back.
+    private func settleHorizontalOriginIfNeeded() {
+        guard !hasSettledHorizontalOrigin, scrollView.rulersVisible else { return }
+        let resting = restingScrollOrigin.x
+        // Zero means the ruler has not been measured yet. Wait for a later pass
+        // rather than spending the one correction on a value that is not real.
+        guard resting < 0 else { return }
+        hasSettledHorizontalOrigin = true
+        let clip = scrollView.contentView
+        guard clip.bounds.origin.x > resting else { return }
+        clip.scroll(to: NSPoint(x: resting, y: clip.bounds.origin.y))
+        scrollView.reflectScrolledClipView(clip)
     }
 
     @objc private func viewScrolled() {
@@ -85,12 +118,16 @@ final class EditorPane: NSView {
         scrollView.hasHorizontalScroller = !newSettings.wordWrap
         gutter.theme = newTheme
         gutter.font = newSettings.editorFont
+        let rulersWereVisible = scrollView.rulersVisible
         gutter.showsLineNumbers = newSettings.showLineNumbers
         gutter.showsBookmarks = newSettings.showBookmarkMargin
         gutter.showsFoldMargin = newSettings.showFoldMargin
         textView.recomputeFolds()
         scrollView.rulersVisible = newSettings.showLineNumbers || newSettings.showBookmarkMargin
             || newSettings.showFoldMargin
+        // A gutter that has just been switched back on moves the resting origin
+        // again, so the pane is allowed one more correction.
+        if scrollView.rulersVisible, !rulersWereVisible { hasSettledHorizontalOrigin = false }
         gutter.recalculateWidth()
         needsLayout = true
         textView.setNeedsHighlight()
@@ -125,6 +162,34 @@ final class EditorPane: NSView {
         scrollView.reflectScrolledClipView(clip)
     }
 
+    /// Scroll a range into view without letting the horizontal position drift.
+    ///
+    /// `scrollRangeToVisible` does not know about the ruler either. Asked to
+    /// show a range at the start of a line it leaves the clip view at `x = 0` --
+    /// but unscrolled is `x = -65.5` with the gutter showing, so the view ends
+    /// up 65pt to the right and the first characters of every line sit hidden
+    /// behind the gutter. That is what opening a file looked like: the document
+    /// appeared with "ding one" where "# Heading one" had been written.
+    ///
+    /// The rule is the honest one rather than a special case for offset zero: if
+    /// the target fits horizontally with the view at rest, it never needed to
+    /// move sideways at all, so put it back.
+    private func scrollRangeToVisibleWithoutDrift(_ range: NSRange) {
+        textView.scrollRangeToVisible(range)
+        guard let layoutManager = textView.layoutManager,
+              let container = textView.textContainer else { return }
+        let clip = scrollView.contentView
+        let resting = restingScrollOrigin.x
+        guard clip.bounds.origin.x > resting else { return }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+        // The clip's bounds origin is in the text view's coordinates, so at rest
+        // the visible span starts at `resting` and runs one clip width.
+        guard rect.maxX <= resting + clip.bounds.width else { return }
+        clip.scroll(to: NSPoint(x: resting, y: clip.bounds.origin.y))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
     /// Restore the cursor and scroll position recorded in the document.
     func restoreViewState() {
         let length = document.textStorage.length
@@ -140,7 +205,7 @@ final class EditorPane: NSView {
             if offset > self.restingScrollOrigin.y {
                 self.scrollVertically(to: offset)
             } else {
-                self.textView.scrollRangeToVisible(self.textView.selectedRange())
+                self.scrollRangeToVisibleWithoutDrift(self.textView.selectedRange())
             }
             self.textView.setNeedsHighlight()
             self.gutter.needsDisplay = true
@@ -162,7 +227,7 @@ final class EditorPane: NSView {
         let clamped = NSRange(location: min(range.location, length),
                               length: min(range.length, max(0, length - min(range.location, length))))
         if select { textView.setSelectedRange(clamped) }
-        textView.scrollRangeToVisible(clamped)
+        scrollRangeToVisibleWithoutDrift(clamped)
         // Centring the hit vertically keeps successive Find Next results in a
         // stable place instead of pinning each one to the bottom edge.
         if let layoutManager = textView.layoutManager, let container = textView.textContainer {
